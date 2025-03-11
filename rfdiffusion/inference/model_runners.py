@@ -72,7 +72,7 @@ class Sampler:
             self.ckpt_path = conf.inference.ckpt_override_path
             print("WARNING: You're overriding the checkpoint path from the defaults. Check that the model you're providing can run with the inputs you're providing.")
         else:
-            if conf.contigmap.inpaint_seq is not None or conf.contigmap.provide_seq is not None or conf.contigmap.inpaint_str:
+            if conf.contigmap.inpaint_seq is not None or conf.contigmap.provide_seq is not None:
                 # use model trained for inpaint_seq
                 if conf.contigmap.provide_seq is not None:
                     # this is only used for partial diffusion
@@ -149,6 +149,7 @@ class Sampler:
             # set default pdb
             script_dir=os.path.dirname(os.path.realpath(__file__))
             self.inf_conf.input_pdb=os.path.join(script_dir, '../../examples/input_pdbs/1qys.pdb')
+            print(f"[DEBUG] use default PDB {self.inf_conf.input_pdb}")
         self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=True, center=False)
         self.chain_idx = None
 
@@ -759,13 +760,17 @@ class ScaffoldedSampler(SelfConditioning):
             self.target = iu.Target(conf.scaffoldguided, conf.ppi.hotspot_res)
             self.target_pdb = self.target.get_target()
             if conf.scaffoldguided.target_ss is not None:
-                self.target_ss = torch.load(conf.scaffoldguided.target_ss).long()
+                self.target_ss = torch.load(conf.scaffoldguided.target_ss, map_location="cpu", weights_only=True).long()
+                print(f"[DEBUG] {self.__class__.__name__} target_ss shape: {self.target_ss.shape} load from {conf.scaffoldguided.target_ss} target_ss device:{self.target_ss.device}")
                 self.target_ss = torch.nn.functional.one_hot(self.target_ss, num_classes=4)
+                print(f"[DEBUG] {self.__class__.__name__} target_ss shape: {self.target_ss.shape} after one hot")
                 if self._conf.scaffoldguided.contig_crop is not None:
                     self.target_ss=self.target_ss[self.target_pdb['crop_mask']]
             if conf.scaffoldguided.target_adj is not None:
-                self.target_adj = torch.load(conf.scaffoldguided.target_adj).long()
+                self.target_adj = torch.load(conf.scaffoldguided.target_adj, map_location="cpu", weights_only=True).long()
+                print(f"[DEBUG] {self.__class__.__name__} target_adj shape: {self.target_adj.shape} load from {conf.scaffoldguided.target_adj}")
                 self.target_adj=torch.nn.functional.one_hot(self.target_adj, num_classes=3)
+                print(f"[DEBUG] {self.__class__.__name__} target_adj shape: {self.target_adj.shape} after one hot")
                 if self._conf.scaffoldguided.contig_crop is not None:
                         self.target_adj=self.target_adj[self.target_pdb['crop_mask']]
                         self.target_adj=self.target_adj[:,self.target_pdb['crop_mask']]
@@ -832,6 +837,7 @@ class ScaffoldedSampler(SelfConditioning):
             self.mappings = self.contig_map.get_mappings()
             self.mask_seq = self.diffusion_mask
             self.mask_str = self.diffusion_mask
+            print(f"[DEBUG] {self.__class__.__name__} contig: {contig}")
             L_mapped=len(self.contig_map.ref)
 
         ############################
@@ -880,6 +886,15 @@ class ScaffoldedSampler(SelfConditioning):
         ### Get hotspots ###
         ####################
         self.hotspot_0idx=iu.get_idx0_hotspots(self.mappings, self.ppi_conf, self.binderlen)
+
+        # px172: 先印出 hotspot_0idx 看看有沒有問題
+        print(f"[DEBUG] {self.__class__.__name__} hotspot_0idx: ", self.hotspot_0idx)
+
+        # px172: 如果為空，拋出錯誤
+        if not self.hotspot_0idx:
+            print(f"[WARNING] {self.__class__.__name__}: hotspot_0idx is empty!")
+            #raise ValueError(f"[ERROR] {self.__class__.__name__}: hotspot_0idx is empty! Check input parameters.")
+
         
         #########################
         ### Set up potentials ###
@@ -938,6 +953,9 @@ class ScaffoldedSampler(SelfConditioning):
         ### Handle Target ###
         #####################
 
+        # px172: 這裡我希望先知道 self.L 以及 self.binderlen 是多少
+        print(f"[DEBUG] {self.__class__.__name__} _preprocess self.L: {self.L}")
+        print(f"[DEBUG] {self.__class__.__name__} _preprocess self.binderlen: {self.binderlen}")
         if self.target:
             blank_ss = torch.nn.functional.one_hot(torch.full((self.L-self.binderlen,), 3), num_classes=4)
             full_ss = torch.cat((self.ss, blank_ss), dim=0)
@@ -945,6 +963,113 @@ class ScaffoldedSampler(SelfConditioning):
                 full_ss[self.binderlen:] = self.target_ss
         else:
             full_ss = self.ss
+
+        # px172: write full_ss to pt file
+
+        # px172: 支援讀寫 ss
+        if self._conf.dev.write_ss_path:
+            os.makedirs(os.path.dirname(self._conf.dev.write_ss_path), exist_ok=True)
+            full_ss_label = torch.argmax(full_ss, dim=-1)
+            full_ss_label = full_ss_label.cpu().numpy()
+            np.savetxt(self._conf.dev.write_ss_path, full_ss_label, delimiter=',',fmt='%d')
+            print(f"[DEV] {self.__class__.__name__} original full_ss shape {full_ss.shape}")
+            print(f"[DEV] {self.__class__.__name__} full_ss_label shape {full_ss_label.shape}")
+            print(f"[DEV] {self.__class__.__name__} full_ss_label saved to {self._conf.dev.write_ss_path}")
+        
+        if self._conf.dev.read_ss_path:
+            # read ss from file
+            df_loaded = np.loadtxt(self._conf.dev.read_ss_path, delimiter=',', dtype=int)
+            loaded_target_ss = torch.tensor(df_loaded).long()
+            # to one-hot format
+            tmp_ss = torch.nn.functional.one_hot(loaded_target_ss, num_classes=4)
+            print(f"[DEV] {self.__class__.__name__} tmp_ss read from {self._conf.dev.read_ss_path}")
+            print(f"[DEV] {self.__class__.__name__} tmp_ss shape {tmp_ss.shape}")
+            print(f"[DEV] {self.__class__.__name__} original full_ss shape {full_ss.shape}")
+            if torch.equal(full_ss, tmp_ss):
+                print("[DEV] full_ss and tmp_ss are identical")
+            else:
+                print("[DEV] full_ss and tmp_ss are different")
+            full_ss = tmp_ss
+            print(f"[DEV] {self.__class__.__name__} new full_ss shape {full_ss.shape}")
+
+
+
+        # px172: 這裡我希望先將 full_ss 還原成 label encoding 並存成csv格式檔案
+        #print(f"[DEBUG] {self.__class__.__name__} final full_ss.shape={full_ss.shape}")
+
+        # px172: 從 self._conf.inference.output_prefix 取得 output 目錄
+        debug_dir = os.path.dirname(self._conf.inference.output_prefix)
+        # px172: 在 output 下建立一個 debug 目錄
+        debug_dir = os.path.join(debug_dir, "debug")
+        # px172: 如果 debug 目錄不存在，則建立
+        os.makedirs(debug_dir, exist_ok=True)
+        # px172: 將 full_ss 存成 csv 檔案
+        print(f"[DEBUG] {self.__class__.__name__} debug_dir={debug_dir}")
+
+        # px172: 這裡我希望寫出檔名前面加上時間戳記
+        from datetime import datetime
+        now = datetime.now()
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
+        debug_write_full_ss = False
+        if debug_write_full_ss:
+            full_ss_label = torch.argmax(full_ss, dim=-1)
+            full_ss_label = full_ss_label.cpu().numpy()
+            np.savetxt(f'{debug_dir}/full_ss.csv', full_ss_label, delimiter=',',fmt='%d')
+
+
+        # px172: 指定區域修改成 beta, alpha o loop 
+        # px172: 指定 insertion_pos
+        insertion_pos = 61
+        # px172: 指定 fragment_length
+        # px172: 修改範圍是從 insertion_pos - fragment_length 到  insertion_pos + fragment_length
+        fragment_length = 2
+        # 定義 beta token（注意型態與 full_ss 相同，並確保 device 一致）
+        alpha_token = torch.tensor([1, 0, 0, 0], dtype=full_ss.dtype, device=full_ss.device)
+        beta_token = torch.tensor([0, 1, 0, 0], dtype=full_ss.dtype, device=full_ss.device)
+        loop_token = torch.tensor([0, 0, 1, 0], dtype=full_ss.dtype, device=full_ss.device)
+        mask_token = torch.tensor([0, 0, 1, 0], dtype=full_ss.dtype, device=full_ss.device)
+        # 將 full_ss 中從 insertion_pos 到 insertion_pos+fragment_length 的位置設為 beta token
+        enable_custom_ss = False
+        enable_binder_mask = False
+        # px172: 這邊我要新增一個選項讓使用者決定要用 beta_token or alpha_token
+
+        # 新增選項：設定 token_choice 可選 "alpha", "beta", 或 "loop"
+        token_choice = "beta"  # 可更改為 "alpha" 或 "loop" 以使用不同的 token
+
+        # 根據 token_choice 選擇對應的 token
+        if token_choice == "alpha":
+            chosen_token = alpha_token
+        elif token_choice == "beta":
+            chosen_token = beta_token
+        elif token_choice == "loop":
+            chosen_token = loop_token
+        elif token_choice == "mask":
+            chosen_token = mask_token
+        else:
+            raise ValueError(f"Invalid token_choice: {token_choice}")
+
+        if enable_custom_ss:
+            # px172: 這裡我希望先將 full_ss 的 self.binderlen 區段進行 mask
+            if self.target:
+                if enable_binder_mask:
+                    mask_ss = torch.nn.functional.one_hot(torch.full((self.binderlen,), 3), num_classes=4)
+                    full_ss[:self.binderlen] = mask_ss
+                    if self._conf.scaffoldguided.target_ss is not None:
+                        full_ss[self.binderlen:] = self.target_ss
+            else:
+                full_ss = self.ss
+            #print(f"[DEBUG] {self.__class__.__name__} the ss is updated to beta token from {insertion_pos-fragment_length} to {insertion_pos+fragment_length}")
+            #print(f"[DEBUG] {self.__class__.__name__} the rest of ss is masked")
+            #print(f"[DEBUG] {self.__class__.__name__} token_choice={token_choice}")
+            full_ss[insertion_pos-fragment_length:insertion_pos+fragment_length] = chosen_token  # 利用 broadcasting，會將每個位置都設成 beta token
+
+        # px172: 寫出更新過的 full_ss
+        #print(f"[DEBUG] {self.__class__.__name__} updated full_ss.shape={full_ss.shape}")
+        if debug_write_full_ss:
+            full_ss_label = torch.argmax(full_ss, dim=-1)
+            full_ss_label = full_ss_label.cpu().numpy()
+            np.savetxt(f'{debug_dir}/upd_full_ss.csv', full_ss_label, delimiter=',',fmt='%d')
+
         t1d=torch.cat((t1d, full_ss[None,None].to(self.device)), dim=-1)
 
         t1d = t1d.float()
@@ -962,6 +1087,93 @@ class ScaffoldedSampler(SelfConditioning):
                     full_adj[self.binderlen:,self.binderlen:] = self.target_adj
             else:
                 full_adj = self.adj
+            
+            # px172: 先印出 full_adj 的 shape
+            #print(f"[DEBUG] {self.__class__.__name__} final full_adj.shape={full_adj.shape}")
+            # px172: 這裡我希望先將 full_adj 還原成 label encoding 並存成csv格式檔案
+            debug_write_full_adj = False
+            if debug_write_full_adj:
+                full_adj_label = torch.argmax(full_adj, dim=-1)
+                full_adj_label = full_adj_label.cpu().numpy()
+                np.savetxt(f"{debug_dir}/full_adj.csv", full_adj_label, delimiter=",", fmt='%d')
+
+            # px172: 指定區域修改成 adj_token      
+            enable_custom_adj = False
+            if enable_custom_adj:
+
+                # px172: 這裡我們先把 binder 部分的 full_adj 全部設為 mask
+                full_adj = torch.zeros((self.L, self.L, 3))
+                full_adj[:,:,-1] = 1. #set to mask
+                if self._conf.scaffoldguided.target_adj is not None:
+                    full_adj[self.binderlen:,self.binderlen:] = self.target_adj
+
+                # px172: 這裡我準備修改 full_adj 指定 binder 特定位置與 target 特定位置的連接 (hotspot)  為 adj_token
+                adj_token = torch.tensor([0, 1, 0], dtype=full_adj.dtype, device=full_adj.device)
+                # px172: 我想要將 insertion_pos 到 fragment_length 與 self.hotspot_0idx[0]的位置設為 adj_token
+                # px172: 注意對稱性，所以要修改兩個位置
+                # pair 1
+                #full_adj[insertion_pos, self.binderlen + self.hotspot_0idx[0]] = adj_token
+                #full_adj[self.binderlen + self.hotspot_0idx[0], insertion_pos] = adj_token
+                # pair 2
+                #full_adj[insertion_pos+1, self.binderlen + self.hotspot_0idx[1]] = adj_token
+                #full_adj[self.binderlen + self.hotspot_0idx[1], insertion_pos+1] = adj_token
+                # pair 3
+                #full_adj[insertion_pos+2, self.binderlen + self.hotspot_0idx[2]] = adj_token
+                #full_adj[self.binderlen + self.hotspot_0idx[2], insertion_pos+2] = adj_token
+
+                # 設定 binder 部分中，從 insertion_pos - fragment_length 到 insertion_pos + fragment_length 之間所有位置，
+                # 與 target (target 在 full_adj 中的位置從 self.binderlen 開始) 中所有 hotspot 位置建立 adjacent 關係
+                for binder_pos in range(insertion_pos - fragment_length, insertion_pos + fragment_length + 1):
+                    # 可選：檢查 binder_pos 是否在合法範圍內（0 至 self.binderlen - 1）
+                    print(f"[DEBUG] {self.__class__.__name__} binder {binder_pos}")
+                    if binder_pos < 0 or binder_pos >= self.binderlen:
+                        print(f"[DEBUG] {self.__class__.__name__} binder {binder_pos} >= binderlen {self.binderlen} continue")
+                        continue
+                    for hotspot in self.hotspot_0idx:
+                        # 計算 target 中 hotspot 的實際位置：target 部分在 full_adj 中從 self.binderlen 開始
+                        target_pos = self.binderlen + hotspot
+                        print(f"[DEBUG] {self.__class__.__name__} add adj of binder {binder_pos} with target {target_pos}")
+                        # 設定對稱關係：binder_pos 與 target_pos 互相標記為 adjacent
+                        full_adj[binder_pos, target_pos] = adj_token
+                        full_adj[target_pos, binder_pos] = adj_token
+
+
+
+            # px172: 印出更新過的 full_adj 的 shape
+            #print(f"[DEBUG] {self.__class__.__name__} updated full_adj.shape={full_adj.shape}")
+            # px172: 這裡我希望先將 full_adj 還原成 label encoding 並存成csv格式檔案
+            if debug_write_full_adj:
+                full_adj_label = torch.argmax(full_adj, dim=-1)
+                full_adj_label = full_adj_label.cpu().numpy()
+                np.savetxt(f"{debug_dir}/upd_adj.csv", full_adj_label, delimiter=",", fmt='%d')
+            
+            if self._conf.dev.write_adj_path:
+                os.makedirs(os.path.dirname(self._conf.dev.write_adj_path), exist_ok=True)
+                full_adj_label = torch.argmax(full_adj, dim=-1)
+                full_adj_label = full_adj_label.cpu().numpy()
+                np.savetxt(self._conf.dev.write_adj_path, full_adj_label, delimiter=",", fmt='%d')
+                print(f"[DEV] {self.__class__.__name__} original full_adj shape {full_adj.shape}")
+                print(f"[DEV] {self.__class__.__name__} full_adj_label shape {full_adj_label.shape}")
+                print(f"[DEV] {self.__class__.__name__} full_adj_label saved to {self._conf.dev.write_adj_path}")
+            
+            if self._conf.dev.read_adj_path:
+                # read adj from file
+                df_loaded = np.loadtxt(self._conf.dev.read_adj_path, delimiter=',', dtype=int)
+                loaded_target_adj = torch.tensor(df_loaded).long()
+                # to one-hot format
+                tmp_adj = torch.nn.functional.one_hot(loaded_target_adj, num_classes=3)
+                print(f"[DEV] {self.__class__.__name__} tmp_adj read from {self._conf.dev.read_adj_path}")
+                print(f"[DEV] {self.__class__.__name__} tmp_adj shape {tmp_adj.shape}")
+                print(f"[DEV] {self.__class__.__name__} original full_adj shape {full_adj.shape}")
+                if torch.equal(full_adj, tmp_adj):
+                    print("[DEV] full_adj and tmp_adj are identical")
+                else:
+                    print("[DEV] full_adj and tmp_adj are different")
+                full_adj = tmp_adj
+                print(f"[DEV] {self.__class__.__name__} new full_adj shape {full_adj.shape}")
+
+            #
+
             t2d=torch.cat((t2d, full_adj[None,None].to(self.device)),dim=-1)
 
         ###########
@@ -970,5 +1182,33 @@ class ScaffoldedSampler(SelfConditioning):
 
         if self.target:
             idx_pdb[:,self.binderlen:] += 200
+        
+        # px172
+        if self._conf.dev.save_ss_adj:
+            design_prefix = os.path.join(os.path.dirname(self._conf.inference.output_prefix), "records")
+            os.makedirs(design_prefix, exist_ok=True)
+            full_ss_label = torch.argmax(full_ss, dim=-1)
+            full_ss_label = full_ss_label.cpu().numpy()
+            np.savetxt(design_prefix + "/ss_label.csv", full_ss_label, delimiter=',',fmt='%d')
+            print(f"[DEV] {self.__class__.__name__} full_ss_label saved to {design_prefix}/ss_label.csv")
+            full_adj_label = torch.argmax(full_adj, dim=-1)
+            full_adj_label = full_adj_label.cpu().numpy()
+            np.savetxt(design_prefix + "/adj_label.csv", full_adj_label, delimiter=",", fmt='%d')
+            print(f"[DEV] {self.__class__.__name__} full_adj_label saved to {design_prefix}/adj_label.csv")
+        
+        # 將 self._conf.ppi.hotspot_res 以及 self.hotspot_0idx 內容輸出到 design_prefix/hotspots.txt
+        if self._conf.dev.save_hotspots:
+            design_prefix = os.path.join(os.path.dirname(self._conf.inference.output_prefix), "records")
+            os.makedirs(design_prefix, exist_ok=True)
+            with open(f"{design_prefix}/hotspots.txt", "w") as f:
+                f.write(f"hotspot_res: {self._conf.ppi.hotspot_res}\n")
+                f.write(f"hotspot_0idx: {self.hotspot_0idx}\n")
+            print(f"[INFO] {self.__class__.__name__} hotspots saved to {design_prefix}")
+
+        # px172 stop for checking ss and adj outputs
+        if self._conf.dev.stop:
+            raise SystemExit(f"[DEV] {self.__class__.__name__} program terminated by dev.stop")
+        
+
 
         return msa_masked, msa_full, seq, xyz_prev, idx_pdb, t1d, t2d, xyz_t, alpha_t

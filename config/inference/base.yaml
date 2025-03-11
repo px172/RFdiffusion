@@ -138,3 +138,19 @@ scaffoldguided:
   target_adj: null
   mask_loops: True
   contig_crop: null
+
+dev:
+  debug: False
+  test_int: 42
+  test_float: 42.0
+  test_str: "42"
+  test_bool: True
+  test_list: [1, 2, 3]
+  test_dict: {a: 1, b: 2, c: 3}
+  write_ss_path: False
+  write_adj_path: False
+  read_ss_path: False
+  read_adj_path: False
+  stop: False
+  save_ss_adj: False
+  save_hotspots: False

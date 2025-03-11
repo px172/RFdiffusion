@@ -50,6 +50,7 @@ RFdiffusion is an open source method for structure generation, with or without c
     - [Understanding the output files](#understanding-the-output-files)
     - [Docker](#docker)
     - [Conclusion](#conclusion)
+- [About this fork](#about-this-fork)
 
 # Getting started / installation
 
@@ -531,5 +532,54 @@ Now, let's go make some proteins. Have fun!
 
 RFdiffusion builds directly on the architecture and trained parameters of RoseTTAFold. We therefore thank Frank DiMaio and Minkyung Baek, who developed RoseTTAFold.
 RFdiffusion is released under an open source BSD License (see LICENSE file). It is free for both non-profit and for-profit use. 
+
+---
+
+## About this fork
+
+This fork of RFdiffusion introduces **Beta Pairing functionality**, which enhances the handling of beta-strand interactions during protein structure generation. 
+
+### **Key Modifications**
+- **Beta Pairing Implementation:** Improved backbone constraints to enhance beta-sheet formation.
+- **Modified Configuration:** Updated `config/inference/base.yaml` to support Beta Pairing.
+- **Enhanced Inference:** Adjustments in `rfdiffusion/inference/model_runners.py` to integrate Beta Pairing.
+
+### **New Configuration Parameters**
+This fork introduces additional parameters in `base.yaml` for better control over secondary structure handling and hotspot tracking:
+
+| Parameter          | Default | Description |
+|-------------------|---------|-------------|
+| `dev.read_ss_path`   | `NA` | When enabled, the model will read secondary structure information from the specified file and use it as input during inference. |
+| `dev.read_adj_path`  | `NA` | When enabled, the model will read adjacency information from the specified file and use it as input during inference. |
+| `dev.stop`           | `False` | A flag to stop the diffusion process at a specific step. |
+| `dev.save_ss_adj`    | `False` | When enabled, this will create a records directory under the default inference.output_prefix path. The secondary structure and adjacency information will be written to ss_label.csv and adj_label.csv, respectively. |
+| `dev.save_hotspots`  | `False` | When enabled, this will create a records directory under the default inference.output_prefix path. The specified hotspot residues will be written to hotspots.txt. |
+
+These parameters allow for **greater flexibility** in controlling the inference process, particularly in **Beta Pairing scenarios** where secondary structure constraints and adjacency matrices play a critical role.
+
+
+
+
+### **Usage**
+To use the Beta Pairing feature, modify the inference command as follows:
+
+```bash
+python rfdiffusion/run_inference.py \
+	scaffoldguided.target_path=demo/7z14G/7z14G.pdb \
+    inference.write_trajectory=False \
+	inference.output_prefix=demo/outputs/${jobname}/beta_ \
+	scaffoldguided.scaffoldguided=True \
+	'ppi.hotspot_res=[G50, G51, G52, G53]' \
+	scaffoldguided.target_pdb=True \
+	scaffoldguided.target_ss=demo/7z14G/7z14G_ss.pt \
+	scaffoldguided.target_adj=demo/7z14G/7z14G_adj.pt \
+	scaffoldguided.scaffold_dir=demo/9bk7/ \
+	inference.num_designs=${num_designs} \
+	denoiser.noise_scale_ca=0 \
+	denoiser.noise_scale_frame=0\
+	dev.stop=false \
+	dev.save_ss_adj=True \
+	dev.read_ss_path=demo/design/design_ss.csv \
+	dev.read_adj_path=demo/design/design_adj.csv
 
 
