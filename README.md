@@ -567,7 +567,7 @@ To use the Beta Pairing feature, modify the inference command as follows:
 python rfdiffusion/run_inference.py \
 	scaffoldguided.target_path=demo/7z14G/7z14G.pdb \
     inference.write_trajectory=False \
-	inference.output_prefix=demo/outputs/${jobname}/beta_ \
+	inference.output_prefix=demo/outputs/beta \
 	scaffoldguided.scaffoldguided=True \
 	'ppi.hotspot_res=[G50, G51, G52, G53]' \
 	scaffoldguided.target_pdb=True \
