@@ -539,6 +539,12 @@ RFdiffusion is released under an open source BSD License (see LICENSE file). It 
 
 This fork of RFdiffusion introduces **Beta Pairing functionality**, which enhances the handling of beta-strand interactions during protein structure generation. 
 
+### Beta Pairing in RFdiffusion
+This diagram illustrates how Beta Pairing is applied in RFdiffusion.
+
+![Beta Pairing in RFdiffusion](demo/RFdiffusion_beta_pairing.jpg)
+
+
 ### **Key Modifications**
 - **Beta Pairing Implementation:** Improved backbone constraints to enhance beta-sheet formation.
 - **Modified Configuration:** Updated `config/inference/base.yaml` to support Beta Pairing.
